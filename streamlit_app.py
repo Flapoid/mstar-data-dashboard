@@ -355,6 +355,65 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                 else:
                     st.write("-")
 
+        # Position analytics (from position section)
+        pos = current.get("position") if isinstance(current, dict) else None
+        if isinstance(pos, dict):
+            st.divider()
+            st.caption("Position Summary")
+            hs = pos.get("holdingSummary", {}) if isinstance(pos.get("holdingSummary"), dict) else {}
+            act = pos.get("holdingActiveShare", {}) if isinstance(pos.get("holdingActiveShare"), dict) else {}
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.metric("Holdings (total)", pos.get("numberOfHolding"))
+                st.metric("Equity holdings", pos.get("numberOfEquityHolding"))
+            with c2:
+                st.metric("Other holdings", pos.get("numberOfOtherHolding"))
+                st.metric("Short positions", pos.get("numberOfHoldingShort"))
+            with c3:
+                st.metric("Active Share %", act.get("activeShareValue"))
+                st.metric("Top N weight %", hs.get("topHoldingWeighting"))
+            with c4:
+                st.metric("Turnover %", hs.get("lastTurnover"))
+                st.metric("Women directors %", hs.get("womenDirectors"))
+
+            # Holding counts bar
+            counts_rows = []
+            for label, key in [
+                ("Equity", "numberOfEquityHolding"),
+                ("Bonds", "numberOfBondHolding"),
+                ("Other", "numberOfOtherHolding"),
+                ("Short", "numberOfHoldingShort"),
+            ]:
+                val = pos.get(key)
+                if val is not None:
+                    counts_rows.append({"Type": label, "Count": val})
+            if counts_rows:
+                st.altair_chart(
+                    alt.Chart(pd.DataFrame(counts_rows))
+                    .mark_bar()
+                    .encode(x=alt.X("Type:N"), y=alt.Y("Count:Q"), tooltip=["Type", "Count"])
+                    .properties(height=220),
+                    use_container_width=True,
+                )
+
+            # Equity holding page detail (top by weight) and download
+            eq_page = pos.get("equityHoldingPage", {})
+            eq_list = eq_page.get("holdingList") if isinstance(eq_page, dict) else None
+            if isinstance(eq_list, list) and eq_list:
+                df_eq = pd.json_normalize([h for h in eq_list if isinstance(h, dict)])
+                if "weighting" in df_eq.columns:
+                    df_eq = df_eq.sort_values("weighting", ascending=False)
+                st.caption("Position – Equity holdings (from position.equityHoldingPage)")
+                st.dataframe(df_eq.head(50), use_container_width=True)
+                with st.expander("Download full equity holding list"):
+                    csv = df_eq.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        "Download CSV",
+                        csv,
+                        file_name=f"position_equity_holdings_{current.get('isin')}.csv",
+                        mime="text/csv",
+                    )
+
         # Secondary panels (compact KPIs, no raw JSON)
         st.divider()
         kpi1, kpi2 = st.columns(2)
