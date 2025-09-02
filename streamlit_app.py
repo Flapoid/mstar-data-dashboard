@@ -442,38 +442,7 @@ def render_compare(data: List[Dict[str, Any]]) -> None:
     else:
         st.info("No comparable price series found for selected funds.")
 
-    # Fund vs Benchmark (if available)
-    st.caption("Fund vs Benchmark (if series available)")
-    for d in data:
-        if d.get("isin") not in selected_isins or d.get("_class") != "fund":
-            continue
-        name = _fund_display_name(d)
-        dfp = _price_series_from_graphdata(d)
-        if dfp is None or dfp.empty:
-            continue
-        # Use first finite value as base to avoid NaN issues
-        finite = dfp["price"][np.isfinite(dfp["price"])]
-        if finite.empty:
-            continue
-        base = finite.iloc[0]
-        if base == 0:
-            continue
-        dfp = dfp.assign(series=(dfp["price"].astype(float) / float(base)) * 100.0, label=name)
-        # Attempt to find benchmark series (not present in current dataset); show note if absent
-        bench_name = None
-        rv = d.get("riskVolatility")
-        if isinstance(rv, dict):
-            bench_name = rv.get("indexName") or rv.get("primaryIndexNameNew")
-        if bench_name:
-            st.text(f"Benchmark: {bench_name}")
-        else:
-            st.text("Benchmark series not available in dataset; displaying fund series only.")
-        ch = (
-            alt.Chart(dfp)
-            .mark_line(point=True)
-            .encode(x=alt.X("date:T"), y=alt.Y("series:Q", title="Index (100=base)"), color=alt.value("#1f77b4"), tooltip=[alt.Tooltip("date:T"), alt.Tooltip("series:Q", format=".2f")])
-        )
-        st.altair_chart(ch.interactive(), use_container_width=True)
+    # Benchmark comparison removed per user request
 
 
 def render_downloads(data: List[Dict[str, Any]]) -> None:
