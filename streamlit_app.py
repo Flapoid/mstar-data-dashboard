@@ -267,7 +267,7 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                     order=alt.Order("weighting:Q", sort="descending"),
                     tooltip=["label", alt.Tooltip("weighting:Q", format=".2f"), "country", "sector"],
                 )
-            )
+            ).properties(height=380)
             st.altair_chart(pie, use_container_width=True)
 
             # Sector distribution
@@ -285,7 +285,7 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                     x=alt.X("weighting:Q", title="Total Weighting (%)"),
                     y=alt.Y("sector:N", sort='-x', title="Sector"),
                     tooltip=["sector", alt.Tooltip("weighting:Q", format=".2f")],
-                )
+                ).properties(height=320)
             )
             st.altair_chart(sec_bar.interactive(), use_container_width=True)
 
@@ -304,7 +304,7 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                     x=alt.X("weighting:Q", title="Total Weighting (%)"),
                     y=alt.Y("country:N", sort='-x', title="Country"),
                     tooltip=["country", alt.Tooltip("weighting:Q", format=".2f")],
-                )
+                ).properties(height=320)
             )
             st.altair_chart(ctry_bar.interactive(), use_container_width=True)
         else:
@@ -321,7 +321,7 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                     x=alt.X("date:T", title="Date", axis=alt.Axis(format="%b %Y", labelAngle=-30)),
                     y=alt.Y("price:Q", title="NAV / Price"),
                     tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("price:Q", format=".2f", title="Price")],
-                )
+                ).properties(height=360)
             )
             st.altair_chart(line.interactive(), use_container_width=True)
         else:
@@ -339,7 +339,7 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                         alt.Chart(na_df)
                         .mark_line(point=True)
                         .encode(x=alt.X("date:T", axis=alt.Axis(format="%b %Y", labelAngle=-30)), y=alt.Y("value:Q", title="Net Assets (Bil)"), color=alt.Color("type:N", title=""))
-                    )
+                    ).properties(height=320)
                     st.altair_chart(na_chart.interactive(), use_container_width=True)
                 else:
                     st.write("-")
@@ -350,7 +350,7 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                         alt.Chart(nf_df)
                         .mark_bar()
                         .encode(x=alt.X("date:T", axis=alt.Axis(format="%b %Y", labelAngle=-30)), y=alt.Y("value:Q", title="Net Flows (Bil)"), color=alt.condition(alt.datum.value >= 0, alt.value("#2ca02c"), alt.value("#d62728")))
-                    )
+                    ).properties(height=320)
                     st.altair_chart(nf_chart.interactive(), use_container_width=True)
                 else:
                     st.write("-")
@@ -391,8 +391,8 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                 st.altair_chart(
                     alt.Chart(pd.DataFrame(counts_rows))
                     .mark_bar()
-                    .encode(x=alt.X("Type:N"), y=alt.Y("Count:Q"), tooltip=["Type", "Count"])
-                    .properties(height=220),
+                    .encode(x=alt.X("Type:N"), y=alt.Y("Count:Q"), tooltip=["Type", "Count"])\
+                    .properties(height=360),
                     use_container_width=True,
                 )
 
