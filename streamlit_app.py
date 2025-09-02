@@ -176,16 +176,21 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
             # Charts
             st.caption("Top Holdings (Pie by weight)")
             top_n = min(15, len(dfh))
-            dfh_top = dfh.head(top_n).copy()
+            # Ensure strictly descending order for slices and legend
+            dfh_top = dfh.sort_values("weighting", ascending=False).head(top_n).copy()
             for col in ["weighting", "esgRisk"]:
                 if col in dfh_top:
                     dfh_top[col] = pd.to_numeric(dfh_top[col], errors="coerce")
+            # Set categorical order for color legend to preserve descending order
+            dfh_top["securityName"] = pd.Categorical(
+                dfh_top["securityName"], categories=list(dfh_top["securityName"]), ordered=True
+            )
             pie = (
                 alt.Chart(dfh_top)
                 .mark_arc(innerRadius=60)
                 .encode(
                     theta=alt.Theta("weighting:Q", stack=True),
-                    color=alt.Color("securityName:N", legend=alt.Legend(title="Security")),
+                    color=alt.Color("securityName:N", sort=None, legend=alt.Legend(title="Security")),
                     order=alt.Order("weighting:Q", sort="descending"),
                     tooltip=["securityName", alt.Tooltip("weighting:Q", format=".2f"), "country", "sector"],
                 )
