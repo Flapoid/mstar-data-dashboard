@@ -439,8 +439,14 @@ def render_compare(data: List[Dict[str, Any]]) -> None:
         merged = pd.concat(series_list, axis=1).dropna(how="all").reset_index().melt("date", var_name="Fund", value_name="Index")
         chart = (
             alt.Chart(merged)
-            .mark_line(point=True)
-            .encode(x=alt.X("date:T", title="Date"), y=alt.Y("Index:Q", title="Index (100=base)"), color="Fund:N", tooltip=["Fund", alt.Tooltip("date:T"), alt.Tooltip("Index:Q", format=".2f")])
+            .mark_line(point=True, opacity=0.9)
+            .encode(
+                x=alt.X("date:T", title="Date"),
+                y=alt.Y("Index:Q", title="Index (100=base)"),
+                color=alt.Color("Fund:N", title="Fund"),
+                strokeDash=alt.StrokeDash("Fund:N", title="Fund"),
+                tooltip=["Fund", alt.Tooltip("date:T"), alt.Tooltip("Index:Q", format=".2f")],
+            )
         )
         st.altair_chart(chart.interactive(), use_container_width=True)
     else:
