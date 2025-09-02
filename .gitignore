@@ -20,3 +20,4 @@ isin_output.csv
 
 # Python packaging
 *.egg-info/
+mstarpy/
