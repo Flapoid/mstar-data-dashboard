@@ -4,6 +4,7 @@ import subprocess
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+import altair as alt
 import streamlit as st
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -68,14 +69,44 @@ def render_overview(data: List[Dict[str, Any]]) -> None:
     st.dataframe(df, use_container_width=True)
 
 
+def _price_series_from_graphdata(current: Dict[str, Any]) -> Optional[pd.DataFrame]:
+    if not isinstance(current, dict):
+        return None
+    gd = current.get("graphData")
+    if not isinstance(gd, dict):
+        return None
+    rows = gd.get("data")
+    if not isinstance(rows, list) or not rows:
+        return None
+    records: List[Dict[str, Any]] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        yr = r.get("yr")
+        if not isinstance(yr, int):
+            continue
+        for q_idx, q_key in enumerate(["naQ1", "naQ2", "naQ3", "naQ4"], start=1):
+            val = r.get(q_key)
+            if val is None:
+                continue
+            # Quarter end dates
+            month_day = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}[q_idx]
+            date = f"{yr}-{month_day}"
+            records.append({"date": pd.to_datetime(date), "price": pd.to_numeric(val, errors="coerce")})
+    if not records:
+        return None
+    df = pd.DataFrame(records).dropna().sort_values("date")
+    if df.empty:
+        return None
+    return df
+
+
 def render_detail(data: List[Dict[str, Any]]) -> None:
     st.subheader("Detail")
     isins = [d.get("isin", "?") for d in data]
     left, right = st.columns([1, 3])
     with left:
         cur = st.selectbox("Select ISIN", isins)
-        flatten = st.checkbox("Flatten fields", value=True)
-        search = st.text_input("Search (case-insensitive)", "")
     current = next((d for d in data if d.get("isin") == cur), None)
     if not current:
         st.warning("No data for selected ISIN")
@@ -125,52 +156,109 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                 })
             dfh = pd.DataFrame(rows).sort_values(by=["weighting"], ascending=False).head(25)
             st.dataframe(dfh, use_container_width=True)
+
+            # Charts
+            st.caption("Top Holdings (by weight)")
+            top_n = min(15, len(dfh))
+            dfh_top = dfh.head(top_n).copy()
+            # Ensure numeric
+            for col in ["weighting", "esgRisk"]:
+                if col in dfh_top:
+                    dfh_top[col] = pd.to_numeric(dfh_top[col], errors="coerce")
+            bar = (
+                alt.Chart(dfh_top)
+                .mark_bar()
+                .encode(
+                    x=alt.X("weighting:Q", title="Weighting (%)"),
+                    y=alt.Y("securityName:N", sort='-x', title="Security"),
+                    tooltip=["securityName", alt.Tooltip("weighting:Q", format=".2f"), "country", "sector"],
+                )
+                .properties(height=25 * top_n)
+            )
+            st.altair_chart(bar.interactive(), use_container_width=True)
+
+            # Sector distribution
+            st.caption("Sector Distribution")
+            sec_df = (
+                dfh.assign(sector=dfh["sector"].fillna("Unknown"))
+                .groupby("sector", dropna=False)["weighting"].sum()
+                .reset_index()
+                .sort_values("weighting", ascending=False)
+            )
+            sec_bar = (
+                alt.Chart(sec_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("weighting:Q", title="Total Weighting (%)"),
+                    y=alt.Y("sector:N", sort='-x', title="Sector"),
+                    tooltip=["sector", alt.Tooltip("weighting:Q", format=".2f")],
+                )
+            )
+            st.altair_chart(sec_bar.interactive(), use_container_width=True)
+
+            # Country distribution
+            st.caption("Country Distribution")
+            ctry_df = (
+                dfh.assign(country=dfh["country"].fillna("Unknown"))
+                .groupby("country", dropna=False)["weighting"].sum()
+                .reset_index()
+                .sort_values("weighting", ascending=False)
+            )
+            ctry_bar = (
+                alt.Chart(ctry_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("weighting:Q", title="Total Weighting (%)"),
+                    y=alt.Y("country:N", sort='-x', title="Country"),
+                    tooltip=["country", alt.Tooltip("weighting:Q", format=".2f")],
+                )
+            )
+            st.altair_chart(ctry_bar.interactive(), use_container_width=True)
         else:
             st.info("No holdings available.")
 
         st.divider()
-        cols = st.columns(2)
-        with cols[0]:
-            st.caption("Risk & Return Summary")
-            rrs = current.get("riskReturnSummary") or {}
-            st.json(rrs)
-        with cols[1]:
-            st.caption("Valuation / Other Fees")
-            other_fee = current.get("otherFee") or {}
-            st.json(other_fee)
+        st.caption("Price (Quarterly)")
+        dfp = _price_series_from_graphdata(current)
+        if dfp is not None:
+            line = (
+                alt.Chart(dfp)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X("date:T", title="Date"),
+                    y=alt.Y("price:Q", title="NAV / Price"),
+                    tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("price:Q", format=".2f", title="Price")],
+                )
+            )
+            st.altair_chart(line.interactive(), use_container_width=True)
+        else:
+            st.info("No price series available.")
 
-        # Advanced: show raw sections selector below
+        # Secondary panels (compact KPIs, no raw JSON)
         st.divider()
-        st.caption("Raw sections")
-        working = flatten_values(current) if flatten else current
-        top_keys = [k for k in working.keys() if not k.startswith("_")]
-        section = st.selectbox("Section", ["ALL"] + sorted(top_keys), key="sec_raw")
-        obj = working if section == "ALL" else working.get(section, {})
-        if search:
-            text = json.dumps(obj, ensure_ascii=False, indent=2)
-            if search.lower() not in text.lower():
-                st.info("No matches in this section.")
-                return
-            st.code(text, language="json")
-            return
-        st.json(obj)
+        kpi1, kpi2 = st.columns(2)
+        with kpi1:
+            st.caption("Risk & Return Summary (selected fields)")
+            rrs = current.get("riskReturnSummary") or {}
+            try:
+                rr_df = pd.DataFrame(rrs) if isinstance(rrs, list) else pd.json_normalize(rrs)
+                st.dataframe(rr_df.head(30), use_container_width=True)
+            except Exception:
+                st.write("-")
+        with kpi2:
+            st.caption("Other Fees (selected fields)")
+            other_fee = current.get("otherFee") or {}
+            try:
+                fee_df = pd.json_normalize(other_fee)
+                st.dataframe(fee_df.T, use_container_width=True)
+            except Exception:
+                st.write("-")
         return
 
-    # Fallback: generic object viewer
-    if flatten:
-        current = flatten_values(current)
-    top_keys = [k for k in current.keys() if not k.startswith("_")]
-    with right:
-        section = st.selectbox("Section", ["ALL"] + sorted(top_keys))
-        obj = current if section == "ALL" else current.get(section, {})
-        if search:
-            text = json.dumps(obj, ensure_ascii=False, indent=2)
-            if search.lower() not in text.lower():
-                st.info("No matches in this section.")
-            else:
-                st.code(text, language="json")
-                return
-        st.json(obj)
+    # Fallback for non-fund types: concise key metrics only
+    st.info("Selected instrument is not a fund. Displaying basic fields.")
+    basic = {k: current.get(k) for k in ["isin", "_class"]}
+    st.table(pd.Series(basic, name="Info"))
 
 
 def render_compare(data: List[Dict[str, Any]]) -> None:
@@ -248,7 +336,7 @@ def main() -> None:
     st.set_page_config(page_title="Fund & Stock Visualizer", layout="wide")
     st.title("Fund & Stock Visualizer")
 
-    tabs = st.tabs(["Overview", "Detail", "Compare", "Raw JSON", "Downloads", "Settings"])
+    tabs = st.tabs(["Overview", "Detail", "Compare", "Downloads", "Settings"])
     data = load_data()
 
     with tabs[0]:
@@ -262,11 +350,8 @@ def main() -> None:
             render_compare(data)
     with tabs[3]:
         if data:
-            st.json(data)
-    with tabs[4]:
-        if data:
             render_downloads(data)
-    with tabs[5]:
+    with tabs[4]:
         render_settings()
 
 
