@@ -210,41 +210,50 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
         st.caption("Top Holdings")
         holdings = current.get("holdings") or []
         if isinstance(holdings, list) and holdings:
-            # Build a concise table
-            rows = []
-            for h in holdings:
-                if not isinstance(h, dict):
-                    continue
-                rows.append({
-                    "securityName": h.get("securityName"),
-                    "weighting": h.get("weighting"),
-                    "country": h.get("country"),
-                    "sector": h.get("sector"),
-                    "esgRisk": h.get("susEsgRiskScore"),
-                    "rating": h.get("stockRating"),
-                })
-            dfh = (
-                pd.DataFrame(rows)
-                .sort_values(by=["weighting"], ascending=False)
-                .head(25)
-                .reset_index(drop=True)
-            )
+            # Build a rich, full-detail table by normalizing all keys
+            dfh_full = pd.json_normalize([h for h in holdings if isinstance(h, dict)])
+            # Prefer core columns first if available
+            core_cols = [
+                "securityName","ticker","isin","country","sector","sectorCode",
+                "weighting","numberOfShare","marketValue","shareChange",
+                "susEsgRiskScore","susEsgRiskCategory","stockRating","assessment",
+                "economicMoat","currency","localCurrencyCode","currencyName",
+                "firstBoughtDate","maturityDate","coupon",
+            ]
+            # Sort by weighting if present
+            if "weighting" in dfh_full.columns:
+                dfh_full = dfh_full.sort_values("weighting", ascending=False)
+            dfh_full = dfh_full.reset_index(drop=True)
             # Add 1-based rank column at the front
-            dfh.insert(0, "rank", dfh.index + 1)
+            dfh_full.insert(0, "rank", dfh_full.index + 1)
+            # Reorder columns: rank + core + rest (without duplicates)
+            rest_cols = [c for c in dfh_full.columns if c not in {"rank", *core_cols}]
+            ordered_cols = ["rank"] + [c for c in core_cols if c in dfh_full.columns] + rest_cols
+            dfh_full = dfh_full[ordered_cols]
+            # Show an expander with full table and a compact top-25 preview above
+            dfh = dfh_full[[c for c in ["rank","securityName","weighting","country","sector","susEsgRiskScore","stockRating"] if c in dfh_full.columns]].head(25)
             st.dataframe(dfh, use_container_width=True)
+            with st.expander("Show all holding fields (full table)"):
+                st.dataframe(dfh_full, use_container_width=True)
+                csv = dfh_full.to_csv(index=False).encode("utf-8")
+                st.download_button("Download holdings (CSV)", csv, file_name=f"holdings_{current.get('isin')}.csv", mime="text/csv")
 
             # Charts
             st.caption("Top Holdings (Pie by weight)")
             top_n = min(15, len(dfh))
             # Ensure strictly descending order for slices and legend
-            dfh_top = dfh.sort_values("weighting", ascending=False).head(top_n).copy()
+            # Use full detail frame for chart source to avoid missing/renamed columns
+            src_for_chart = dfh_full if "securityName" in dfh_full.columns else dfh
+            dfh_top = src_for_chart.sort_values("weighting", ascending=False).head(top_n).copy()
             for col in ["weighting", "esgRisk"]:
                 if col in dfh_top:
                     dfh_top[col] = pd.to_numeric(dfh_top[col], errors="coerce")
             # Build a rank-prefixed label for legend and slice ordering
             dfh_top = dfh_top.reset_index(drop=True)
             dfh_top["rank"] = dfh_top.index + 1
-            dfh_top["label"] = dfh_top.apply(lambda r: f"{int(r['rank'])}. {r['securityName']}", axis=1)
+            # Guard against missing securityName field
+            dfh_top["_sec"] = dfh_top.get("securityName", pd.Series(["?"]*len(dfh_top)))
+            dfh_top["label"] = dfh_top.apply(lambda r: f"{int(r['rank'])}. {r['_sec']}", axis=1)
             # Set categorical order for legend based on descending weight
             dfh_top["label"] = pd.Categorical(
                 dfh_top["label"], categories=list(dfh_top["label"]), ordered=True
