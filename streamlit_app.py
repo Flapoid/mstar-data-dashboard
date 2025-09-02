@@ -116,10 +116,13 @@ def _price_series_from_graphdata(current: Dict[str, Any]) -> Optional[pd.DataFra
 
 def render_detail(data: List[Dict[str, Any]]) -> None:
     st.subheader("Detail")
-    isins = [d.get("isin", "?") for d in data]
+    # Build labeled choices with names
+    label_to_isin = {_fund_display_name(d): d.get("isin") for d in data}
+    labels = list(label_to_isin.keys())
     left, right = st.columns([1, 3])
     with left:
-        cur = st.selectbox("Select ISIN", isins)
+        sel_label = st.selectbox("Select fund", labels)
+        cur = label_to_isin.get(sel_label)
     current = next((d for d in data if d.get("isin") == cur), None)
     if not current:
         st.warning("No data for selected ISIN")
@@ -183,6 +186,7 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                 .encode(
                     theta=alt.Theta("weighting:Q", stack=True),
                     color=alt.Color("securityName:N", legend=alt.Legend(title="Security")),
+                    order=alt.Order("weighting:Q", sort="descending"),
                     tooltip=["securityName", alt.Tooltip("weighting:Q", format=".2f"), "country", "sector"],
                 )
             )
