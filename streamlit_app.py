@@ -309,7 +309,7 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                 alt.Chart(dfp)
                 .mark_line(point=True)
                 .encode(
-                    x=alt.X("date:T", title="Date"),
+                    x=alt.X("date:T", title="Date", axis=alt.Axis(format="%b %Y", labelAngle=-30)),
                     y=alt.Y("price:Q", title="NAV / Price"),
                     tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("price:Q", format=".2f", title="Price")],
                 )
@@ -329,7 +329,7 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                     na_chart = (
                         alt.Chart(na_df)
                         .mark_line(point=True)
-                        .encode(x="date:T", y=alt.Y("value:Q", title="Net Assets (Bil)"), color=alt.Color("type:N", title=""))
+                        .encode(x=alt.X("date:T", axis=alt.Axis(format="%b %Y", labelAngle=-30)), y=alt.Y("value:Q", title="Net Assets (Bil)"), color=alt.Color("type:N", title=""))
                     )
                     st.altair_chart(na_chart.interactive(), use_container_width=True)
                 else:
@@ -340,7 +340,7 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                     nf_chart = (
                         alt.Chart(nf_df)
                         .mark_bar()
-                        .encode(x="date:T", y=alt.Y("value:Q", title="Net Flows (Bil)"), color=alt.condition(alt.datum.value >= 0, alt.value("#2ca02c"), alt.value("#d62728")))
+                        .encode(x=alt.X("date:T", axis=alt.Axis(format="%b %Y", labelAngle=-30)), y=alt.Y("value:Q", title="Net Flows (Bil)"), color=alt.condition(alt.datum.value >= 0, alt.value("#2ca02c"), alt.value("#d62728")))
                     )
                     st.altair_chart(nf_chart.interactive(), use_container_width=True)
                 else:
@@ -441,7 +441,7 @@ def render_compare(data: List[Dict[str, Any]]) -> None:
             alt.Chart(merged)
             .mark_line(point=True, opacity=0.9)
             .encode(
-                x=alt.X("date:T", title="Date"),
+                x=alt.X("date:T", title="Date", axis=alt.Axis(format="%b %Y", labelAngle=-30)),
                 y=alt.Y("Index:Q", title="Index (100=base)"),
                 color=alt.Color("Fund:N", title="Fund"),
                 strokeDash=alt.StrokeDash("Fund:N", title="Fund"),
