@@ -1,0 +1,4 @@
+# Paste one ISIN per line. Lines starting with # are ignored.
+# Inline comments after # are allowed.
+FR0000121014 # LVMH (stock)
+IE00B0M62Q58 # Vanguard FTSE All-World UCITS ETF (fund)
