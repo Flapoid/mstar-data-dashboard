@@ -4,6 +4,7 @@ import subprocess
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+import numpy as np
 import altair as alt
 import streamlit as st
 
@@ -450,8 +451,14 @@ def render_compare(data: List[Dict[str, Any]]) -> None:
         dfp = _price_series_from_graphdata(d)
         if dfp is None or dfp.empty:
             continue
-        base = dfp["price"].iloc[0]
-        dfp = dfp.assign(series=(dfp["price"] / base) * 100.0, label=name)
+        # Use first finite value as base to avoid NaN issues
+        finite = dfp["price"][np.isfinite(dfp["price"])]
+        if finite.empty:
+            continue
+        base = finite.iloc[0]
+        if base == 0:
+            continue
+        dfp = dfp.assign(series=(dfp["price"].astype(float) / float(base)) * 100.0, label=name)
         # Attempt to find benchmark series (not present in current dataset); show note if absent
         bench_name = None
         rv = d.get("riskVolatility")
