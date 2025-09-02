@@ -20,6 +20,19 @@ def load_data() -> List[Dict[str, Any]]:
         return []
     with open(DATA_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
+def _fund_display_name(entry: Dict[str, Any]) -> str:
+    isin = entry.get("isin", "?")
+    name = None
+    if entry.get("_class") == "fund":
+        dp = entry.get("dataPoint", {})
+        if isinstance(dp, dict):
+            nm = dp.get("name")
+            if isinstance(nm, dict):
+                name = nm.get("value")
+    if not name:
+        name = entry.get("overview", {}).get("name") if isinstance(entry.get("overview"), dict) else None
+    return f"{name or 'Unnamed'} ({isin})"
+
 
 
 def flatten_values(obj: Any) -> Any:
@@ -158,24 +171,22 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
             st.dataframe(dfh, use_container_width=True)
 
             # Charts
-            st.caption("Top Holdings (by weight)")
+            st.caption("Top Holdings (Pie by weight)")
             top_n = min(15, len(dfh))
             dfh_top = dfh.head(top_n).copy()
-            # Ensure numeric
             for col in ["weighting", "esgRisk"]:
                 if col in dfh_top:
                     dfh_top[col] = pd.to_numeric(dfh_top[col], errors="coerce")
-            bar = (
+            pie = (
                 alt.Chart(dfh_top)
-                .mark_bar()
+                .mark_arc(innerRadius=60)
                 .encode(
-                    x=alt.X("weighting:Q", title="Weighting (%)"),
-                    y=alt.Y("securityName:N", sort='-x', title="Security"),
+                    theta=alt.Theta("weighting:Q", stack=True),
+                    color=alt.Color("securityName:N", legend=alt.Legend(title="Security")),
                     tooltip=["securityName", alt.Tooltip("weighting:Q", format=".2f"), "country", "sector"],
                 )
-                .properties(height=25 * top_n)
             )
-            st.altair_chart(bar.interactive(), use_container_width=True)
+            st.altair_chart(pie, use_container_width=True)
 
             # Sector distribution
             st.caption("Sector Distribution")
@@ -263,29 +274,81 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
 
 def render_compare(data: List[Dict[str, Any]]) -> None:
     st.subheader("Compare")
-    choices = [d.get("isin", "?") for d in data]
-    selected = st.multiselect("Select ISINs to compare", choices, default=choices[:2])
-    _ = st.checkbox("Flatten fields", value=True, key="cmp_flat")
+    # Build labeled choices with names
+    label_to_isin = {}
+    for d in data:
+        label_to_isin[_fund_display_name(d)] = d.get("isin")
+    default_labels = list(label_to_isin.keys())[:2]
+    selected_labels = st.multiselect("Select funds to compare", list(label_to_isin.keys()), default=default_labels)
+    selected_isins = [label_to_isin[l] for l in selected_labels]
 
+    # Table summary
     cmp_rows = []
     for d in data:
-        if d.get("isin") not in selected:
+        if d.get("isin") not in selected_isins:
             continue
-        row = {"isin": d.get("isin"), "_class": d.get("_class")}
+        row = {"isin": d.get("isin"), "name": _fund_display_name(d), "_class": d.get("_class")}
         if d.get("_class") == "fund":
             dp = d.get("dataPoint", {})
-            name = dp.get("name", {}).get("value") if isinstance(dp, dict) else None
             prev = dp.get("previousClosePrice", {}).get("value") if isinstance(dp, dict) else None
-            row.update({"name": name, "previousClose": prev})
-        if "tradingInformation" in d and isinstance(d["tradingInformation"], dict):
-            try:
-                ti = next(iter(d["tradingInformation"].values()))
-                acp = ti.get("adjustedClosePrice", {}).get("value")
-                row["adjustedClosePrice"] = acp
-            except Exception:
-                pass
+            row.update({"previousClose": prev})
         cmp_rows.append(row)
-    st.dataframe(pd.DataFrame(cmp_rows), use_container_width=True)
+    if cmp_rows:
+        st.dataframe(pd.DataFrame(cmp_rows), use_container_width=True)
+
+    # Relative performance (normalize to 100)
+    st.caption("Relative performance (normalized to 100)")
+    series_list = []
+    for d in data:
+        if d.get("isin") not in selected_isins or d.get("_class") != "fund":
+            continue
+        dfp = _price_series_from_graphdata(d)
+        if dfp is None or dfp.empty:
+            continue
+        dfp = dfp.sort_values("date")
+        base = dfp["price"].iloc[0]
+        if base == 0:
+            continue
+        dfp = dfp.assign(rel=(dfp["price"] / base) * 100.0)
+        dfp = dfp[["date", "rel"]].rename(columns={"rel": _fund_display_name(d)})
+        series_list.append(dfp.set_index("date"))
+    if series_list:
+        merged = pd.concat(series_list, axis=1).dropna(how="all").reset_index().melt("date", var_name="Fund", value_name="Index")
+        chart = (
+            alt.Chart(merged)
+            .mark_line(point=True)
+            .encode(x=alt.X("date:T", title="Date"), y=alt.Y("Index:Q", title="Index (100=base)"), color="Fund:N", tooltip=["Fund", alt.Tooltip("date:T"), alt.Tooltip("Index:Q", format=".2f")])
+        )
+        st.altair_chart(chart.interactive(), use_container_width=True)
+    else:
+        st.info("No comparable price series found for selected funds.")
+
+    # Fund vs Benchmark (if available)
+    st.caption("Fund vs Benchmark (if series available)")
+    for d in data:
+        if d.get("isin") not in selected_isins or d.get("_class") != "fund":
+            continue
+        name = _fund_display_name(d)
+        dfp = _price_series_from_graphdata(d)
+        if dfp is None or dfp.empty:
+            continue
+        base = dfp["price"].iloc[0]
+        dfp = dfp.assign(series=(dfp["price"] / base) * 100.0, label=name)
+        # Attempt to find benchmark series (not present in current dataset); show note if absent
+        bench_name = None
+        rv = d.get("riskVolatility")
+        if isinstance(rv, dict):
+            bench_name = rv.get("indexName") or rv.get("primaryIndexNameNew")
+        if bench_name:
+            st.text(f"Benchmark: {bench_name}")
+        else:
+            st.text("Benchmark series not available in dataset; displaying fund series only.")
+        ch = (
+            alt.Chart(dfp)
+            .mark_line(point=True)
+            .encode(x=alt.X("date:T"), y=alt.Y("series:Q", title="Index (100=base)"), color=alt.value("#1f77b4"), tooltip=[alt.Tooltip("date:T"), alt.Tooltip("series:Q", format=".2f")])
+        )
+        st.altair_chart(ch.interactive(), use_container_width=True)
 
 
 def render_downloads(data: List[Dict[str, Any]]) -> None:
