@@ -397,7 +397,7 @@ def render_compare(data: List[Dict[str, Any]]) -> None:
     label_to_isin = {}
     for d in data:
         label_to_isin[_fund_display_name(d)] = d.get("isin")
-    default_labels = list(label_to_isin.keys())[:2]
+    default_labels = list(label_to_isin.keys())[:1]
     selected_labels = st.multiselect("Select funds to compare", list(label_to_isin.keys()), default=default_labels)
     selected_isins = [label_to_isin[l] for l in selected_labels]
 
