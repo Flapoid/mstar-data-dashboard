@@ -114,6 +114,58 @@ def _price_series_from_graphdata(current: Dict[str, Any]) -> Optional[pd.DataFra
     return df
 
 
+def _net_assets_series(current: Dict[str, Any]) -> Optional[pd.DataFrame]:
+    gd = current.get("graphData") if isinstance(current, dict) else None
+    if not isinstance(gd, dict):
+        return None
+    rows = gd.get("data")
+    if not isinstance(rows, list):
+        return None
+    records: List[Dict[str, Any]] = []
+    for r in rows:
+        if not isinstance(r, dict) or "yr" not in r:
+            continue
+        yr = r["yr"]
+        for q_idx, key in enumerate(["naQ1", "naQ2", "naQ3", "naQ4"], start=1):
+            val = r.get(key)
+            if val is None:
+                continue
+            month_day = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}[q_idx]
+            records.append({"date": pd.to_datetime(f"{yr}-{month_day}"), "value": pd.to_numeric(val, errors="coerce"), "type": "Quarterly"})
+        if r.get("naYr") is not None:
+            records.append({"date": pd.to_datetime(f"{yr}-12-31"), "value": pd.to_numeric(r.get("naYr"), errors="coerce"), "type": "Yearly"})
+    if not records:
+        return None
+    df = pd.DataFrame(records).dropna().sort_values("date")
+    return df if not df.empty else None
+
+
+def _net_flows_series(current: Dict[str, Any]) -> Optional[pd.DataFrame]:
+    gd = current.get("graphData") if isinstance(current, dict) else None
+    if not isinstance(gd, dict):
+        return None
+    rows = gd.get("data")
+    if not isinstance(rows, list):
+        return None
+    records: List[Dict[str, Any]] = []
+    for r in rows:
+        if not isinstance(r, dict) or "yr" not in r:
+            continue
+        yr = r["yr"]
+        for q_idx, key in enumerate(["nfQ1", "nfQ2", "nfQ3", "nfQ4"], start=1):
+            val = r.get(key)
+            if val is None:
+                continue
+            month_day = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}[q_idx]
+            records.append({"date": pd.to_datetime(f"{yr}-{month_day}"), "value": pd.to_numeric(val, errors="coerce"), "type": "Quarterly"})
+        if r.get("nfYr") is not None:
+            records.append({"date": pd.to_datetime(f"{yr}-12-31"), "value": pd.to_numeric(r.get("nfYr"), errors="coerce"), "type": "Yearly"})
+    if not records:
+        return None
+    df = pd.DataFrame(records).dropna().sort_values("date")
+    return df if not df.empty else None
+
+
 def render_detail(data: List[Dict[str, Any]]) -> None:
     st.subheader("Detail")
     # Build labeled choices with names
@@ -254,6 +306,34 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
         else:
             st.info("No price series available.")
 
+        # Net assets and net flows
+        na_df = _net_assets_series(current)
+        nf_df = _net_flows_series(current)
+        if na_df is not None or nf_df is not None:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.caption("Net Assets Over Time")
+                if na_df is not None:
+                    na_chart = (
+                        alt.Chart(na_df)
+                        .mark_line(point=True)
+                        .encode(x="date:T", y=alt.Y("value:Q", title="Net Assets (Bil)"), color=alt.Color("type:N", title=""))
+                    )
+                    st.altair_chart(na_chart.interactive(), use_container_width=True)
+                else:
+                    st.write("-")
+            with c2:
+                st.caption("Net Flows Over Time")
+                if nf_df is not None:
+                    nf_chart = (
+                        alt.Chart(nf_df)
+                        .mark_bar()
+                        .encode(x="date:T", y=alt.Y("value:Q", title="Net Flows (Bil)"), color=alt.condition(alt.datum.value >= 0, alt.value("#2ca02c"), alt.value("#d62728")))
+                    )
+                    st.altair_chart(nf_chart.interactive(), use_container_width=True)
+                else:
+                    st.write("-")
+
         # Secondary panels (compact KPIs, no raw JSON)
         st.divider()
         kpi1, kpi2 = st.columns(2)
@@ -273,6 +353,24 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
                 st.dataframe(fee_df.T, use_container_width=True)
             except Exception:
                 st.write("-")
+
+        # Risk KPIs from riskVolatility
+        st.divider()
+        st.caption("Risk Metrics (Alpha/Beta/R^2)")
+        rv = current.get("riskVolatility") or {}
+        frv = rv.get("fundRiskVolatility") if isinstance(rv, dict) else None
+        if isinstance(frv, dict):
+            cols = st.columns(3)
+            periods = ["for1Year", "for3Year", "for5Year"]
+            labels = ["1 Year", "3 Years", "5 Years"]
+            for col, period, label in zip(cols, periods, labels):
+                with col:
+                    vals = frv.get(period) or {}
+                    st.metric(f"{label} Alpha", vals.get("alpha", "-"))
+                    st.metric(f"{label} Beta", vals.get("beta", "-"))
+                    st.metric(f"{label} R-Squared", vals.get("rSquared", "-"))
+        else:
+            st.info("No risk metrics available.")
         return
 
     # Fallback for non-fund types: concise key metrics only
