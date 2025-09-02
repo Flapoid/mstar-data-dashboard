@@ -1,7 +1,7 @@
 import json
 import os
 import subprocess
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
@@ -80,6 +80,83 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
     if not current:
         st.warning("No data for selected ISIN")
         return
+
+    def get_dp(field: str, default: Any = None) -> Any:
+        dp = current.get("dataPoint", {}) if isinstance(current, dict) else {}
+        val = None
+        if isinstance(dp, dict):
+            v = dp.get(field)
+            if isinstance(v, dict):
+                val = v.get("value", default)
+        return val if val is not None else default
+
+    # Specialized fund view
+    if current.get("_class") == "fund":
+        name = get_dp("name", "-")
+        prev_close = get_dp("previousClosePrice")
+        st.markdown(f"**{name}** ({current.get('isin')})")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Prev Close", prev_close)
+        fee = current.get("feeLevel", {})
+        with col2:
+            st.metric("Fee Level", fee.get("morningstarFeeLevel"))
+        with col3:
+            st.metric("Fee Percentile", fee.get("morningstarFeeLevelPercentileRank"))
+        with col4:
+            st.metric("Domicile", fee.get("domicileCountryId"))
+
+        st.divider()
+        st.caption("Top Holdings")
+        holdings = current.get("holdings") or []
+        if isinstance(holdings, list) and holdings:
+            # Build a concise table
+            rows = []
+            for h in holdings:
+                if not isinstance(h, dict):
+                    continue
+                rows.append({
+                    "securityName": h.get("securityName"),
+                    "weighting": h.get("weighting"),
+                    "country": h.get("country"),
+                    "sector": h.get("sector"),
+                    "esgRisk": h.get("susEsgRiskScore"),
+                    "rating": h.get("stockRating"),
+                })
+            dfh = pd.DataFrame(rows).sort_values(by=["weighting"], ascending=False).head(25)
+            st.dataframe(dfh, use_container_width=True)
+        else:
+            st.info("No holdings available.")
+
+        st.divider()
+        cols = st.columns(2)
+        with cols[0]:
+            st.caption("Risk & Return Summary")
+            rrs = current.get("riskReturnSummary") or {}
+            st.json(rrs)
+        with cols[1]:
+            st.caption("Valuation / Other Fees")
+            other_fee = current.get("otherFee") or {}
+            st.json(other_fee)
+
+        # Advanced: show raw sections selector below
+        st.divider()
+        st.caption("Raw sections")
+        working = flatten_values(current) if flatten else current
+        top_keys = [k for k in working.keys() if not k.startswith("_")]
+        section = st.selectbox("Section", ["ALL"] + sorted(top_keys), key="sec_raw")
+        obj = working if section == "ALL" else working.get(section, {})
+        if search:
+            text = json.dumps(obj, ensure_ascii=False, indent=2)
+            if search.lower() not in text.lower():
+                st.info("No matches in this section.")
+                return
+            st.code(text, language="json")
+            return
+        st.json(obj)
+        return
+
+    # Fallback: generic object viewer
     if flatten:
         current = flatten_values(current)
     top_keys = [k for k in current.keys() if not k.startswith("_")]

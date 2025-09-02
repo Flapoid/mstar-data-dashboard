@@ -3,6 +3,9 @@ import json
 import os
 import sys
 import argparse
+import datetime
+import math
+import time
 from typing import List, Dict, Any
 
 # Remove project root from sys.path to avoid namespace shadowing of installed package
@@ -88,13 +91,24 @@ def fetch_full_stock(isin: str, methods: List[str]) -> Dict[str, Any]:
 
 def fetch_info_for_isin(isin: str, full: bool, methods_cfg: Dict[str, List[str]]) -> Dict[str, Any]:
     if full:
+        started = time.time()
         try:
-            return fetch_full_fund(isin, methods_cfg.get("fund_methods", []))
-        except Exception:
-            pass
+            data = fetch_full_fund(isin, methods_cfg.get("fund_methods", []))
+            duration = time.time() - started
+            print(f"  ✓ Fund fetched for {isin} in {duration:.2f}s")
+            return data
+        except Exception as exc_fund:
+            duration = time.time() - started
+            print(f"  … Fund fetch failed for {isin} in {duration:.2f}s: {exc_fund}")
+        started = time.time()
         try:
-            return fetch_full_stock(isin, methods_cfg.get("stock_methods", []))
+            data = fetch_full_stock(isin, methods_cfg.get("stock_methods", []))
+            duration = time.time() - started
+            print(f"  ✓ Stock fetched for {isin} in {duration:.2f}s")
+            return data
         except Exception as exc:
+            duration = time.time() - started
+            print(f"  ✗ Both fetches failed for {isin} in {duration:.2f}s: {exc}")
             return {"isin": isin, "_class": "unknown", "_error": str(exc)}
     # lightweight mode
     try:
@@ -117,8 +131,52 @@ def fetch_info_for_isin(isin: str, full: bool, methods_cfg: Dict[str, List[str]]
 
 
 def write_json(rows: List[Dict[str, Any]], out_path: str) -> None:
+    try:
+        import numpy as _np  # type: ignore
+    except Exception:
+        _np = None  # type: ignore
+    try:
+        import pandas as _pd  # type: ignore
+    except Exception:
+        _pd = None  # type: ignore
+
+    def _to_serializable(obj: Any):
+        # Fast-path for primitives
+        if obj is None or isinstance(obj, (str, int, bool)):
+            return obj
+        if isinstance(obj, float):
+            return None if not math.isfinite(obj) else obj
+        # Datetime-like
+        if isinstance(obj, (datetime.date, datetime.datetime)):
+            return obj.isoformat()
+        # Numpy types
+        if _np is not None:
+            if isinstance(obj, (_np.integer,)):
+                return int(obj)
+            if isinstance(obj, (_np.floating,)):
+                val = float(obj)
+                return None if not math.isfinite(val) else val
+            if isinstance(obj, (_np.ndarray,)):
+                return [_to_serializable(x) for x in obj.tolist()]
+        # Pandas types
+        if _pd is not None:
+            if isinstance(obj, _pd.DataFrame):
+                return [_to_serializable(r) for r in obj.to_dict(orient="records")]
+            if isinstance(obj, _pd.Series):
+                return {str(k): _to_serializable(v) for k, v in obj.to_dict().items()}
+            # pandas Timestamp
+            if hasattr(_pd, "Timestamp") and isinstance(obj, _pd.Timestamp):
+                return obj.isoformat()
+        # Collections
+        if isinstance(obj, dict):
+            return {str(k): _to_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple, set)):
+            return [_to_serializable(v) for v in obj]
+        # Fallback to string representation
+        return str(obj)
+
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(rows, f, ensure_ascii=False, indent=2)
+        json.dump(_to_serializable(rows), f, ensure_ascii=False, indent=2, allow_nan=False)
 
 
 def write_csv(rows: List[Dict[str, Any]], out_path: str) -> None:
@@ -147,10 +205,21 @@ def main() -> int:
     if not isins:
         print("No ISINs provided in ISINs.txt")
         return 1
+    success = 0
+    failure = 0
     results: List[Dict[str, Any]] = []
     for i, isin in enumerate(isins, 1):
-        print(f"[{i}/{len(isins)}] Fetching {isin}...")
-        results.append(fetch_info_for_isin(isin, full=args.full, methods_cfg=methods_cfg))
+        print(f"[{i}/{len(isins)}] Fetching {isin}…")
+        started = time.time()
+        data = fetch_info_for_isin(isin, full=args.full, methods_cfg=methods_cfg)
+        elapsed = time.time() - started
+        results.append(data)
+        if isinstance(data, dict) and data.get("_class") == "unknown" and data.get("_error"):
+            failure += 1
+            print(f"  ✗ Failed {isin} ({elapsed:.2f}s): {data.get('_error')}")
+        else:
+            success += 1
+            print(f"  ✓ Done {isin} ({elapsed:.2f}s)")
 
     if args.format == "json":
         out_path = os.path.join(root, "isin_output.json")
@@ -159,7 +228,17 @@ def main() -> int:
         out_path = os.path.join(root, "isin_output.csv")
         write_csv(results, out_path)
 
+    # Validate JSON by reloading
+    if args.format == "json":
+        try:
+            with open(out_path, "r", encoding="utf-8") as f:
+                _ = json.load(f)
+            print("Output JSON validated successfully (parsed without errors).")
+        except Exception as exc:
+            print(f"Warning: JSON validation failed: {exc}")
+
     print(f"Wrote {len(results)} rows to {out_path}")
+    print(f"Summary: {success} succeeded, {failure} failed")
     return 0
 
 
