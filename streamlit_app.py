@@ -425,10 +425,14 @@ def render_compare(data: List[Dict[str, Any]]) -> None:
         if dfp is None or dfp.empty:
             continue
         dfp = dfp.sort_values("date")
-        base = dfp["price"].iloc[0]
-        if base == 0:
+        # Use the first finite price as base to avoid NaN/zero issues
+        finite = dfp["price"][np.isfinite(dfp["price"])].astype(float)
+        if finite.empty:
             continue
-        dfp = dfp.assign(rel=(dfp["price"] / base) * 100.0)
+        base = float(finite.iloc[0])
+        if base == 0.0:
+            continue
+        dfp = dfp.assign(rel=(dfp["price"].astype(float) / base) * 100.0)
         dfp = dfp[["date", "rel"]].rename(columns={"rel": _fund_display_name(d)})
         series_list.append(dfp.set_index("date"))
     if series_list:
