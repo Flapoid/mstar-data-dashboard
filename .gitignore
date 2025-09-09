@@ -15,7 +15,6 @@ ENV/
 .streamlit/
 
 # Data outputs
-isin_output.json
 isin_output.csv
 
 # Python packaging
