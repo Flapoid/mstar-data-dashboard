@@ -639,6 +639,44 @@ def render_performance(data: List[Dict[str, Any]]) -> None:
     with c4:
         st.metric(y_labels[-1][0], "-" if y_labels[-1][1] is None else f"{y_labels[-1][1]:.2f}%")
 
+    # Solar year performance (visualize exactly as provided, preserving order)
+    hist = current.get("historicalData") if isinstance(current, dict) else None
+    table = hist.get("table") if isinstance(hist, dict) else None
+    if isinstance(table, dict):
+        cols = table.get("columnDefs")
+        rows = table.get("growth10KReturnData")
+        fund_row = next((r for r in rows if isinstance(r, dict) and r.get("label") == "fund"), None) if isinstance(rows, list) else None
+        if isinstance(cols, list) and isinstance(fund_row, dict) and isinstance(fund_row.get("datum"), list) and len(fund_row["datum"]) == len(cols):
+            # Build series, keep only numeric calendar years, preserve original order
+            labels: List[str] = [str(c) for c in cols]
+            values: List[Optional[float]] = []
+            for v in fund_row["datum"]:
+                try:
+                    values.append(None if v is None else float(v))
+                except Exception:
+                    values.append(None)
+            year_rows = [
+                {"Year": lbl, "Return": val}
+                for lbl, val in zip(labels, values)
+                if lbl.isdigit()
+            ]
+            if year_rows:
+                st.caption("Solar year performance (as provided)")
+                df_years = pd.DataFrame(year_rows)
+                st.altair_chart(
+                    alt.Chart(df_years)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("Year:N", sort=list(df_years["Year"])),
+                        y=alt.Y("Return:Q", title="%"),
+                        tooltip=["Year", alt.Tooltip("Return:Q", format=".2f")],
+                        color=alt.condition(alt.datum.Return >= 0, alt.value("#2ca02c"), alt.value("#d62728")),
+                    )
+                    .properties(height=320)
+                    .interactive(),
+                    use_container_width=True,
+                )
+
     # Normalize to 100 from first valid point
     finite = df_nav["price"][np.isfinite(df_nav["price"])].astype(float)
     if not finite.empty and float(finite.iloc[0]) != 0.0:
