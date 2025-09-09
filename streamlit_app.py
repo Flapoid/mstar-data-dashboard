@@ -2,7 +2,7 @@ import json
 import os
 import sys
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import numpy as np
@@ -165,14 +165,14 @@ def _parse_nav_series(nav_payload: Any) -> Optional[pd.DataFrame]:
     return df if not df.empty else None
 
 
-def _price_series_from_any(current: Dict[str, Any]) -> Optional[pd.DataFrame]:
+def _price_series_from_any(current: Dict[str, Any]) -> Tuple[Optional[pd.DataFrame], str]:
     # Prefer NAV if available
     if isinstance(current, dict) and "nav" in current:
         df_nav = _parse_nav_series(current.get("nav"))
         if df_nav is not None and not df_nav.empty:
-            return df_nav
+            return df_nav, "NAV"
     # Fallback to graphData-derived quarterly series
-    return _price_series_from_graphdata(current)
+    return _price_series_from_graphdata(current), "graphData"
 
 
 def _net_assets_series(current: Dict[str, Any]) -> Optional[pd.DataFrame]:
@@ -371,9 +371,11 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
             st.info("No holdings available.")
 
         st.divider()
-        st.caption("Price (Quarterly)")
-        dfp = _price_series_from_any(current)
+        dfp, src = _price_series_from_any(current)
+        st.caption("Price" + (" (NAV)" if src == "NAV" else " (fallback)"))
         if dfp is not None:
+            if src != "NAV":
+                st.info("NAV not available for this fund. Falling back to quarterly graphData-derived series.")
             line = (
                 alt.Chart(dfp)
                 .mark_line(point=True)
@@ -546,12 +548,15 @@ def render_compare(data: List[Dict[str, Any]]) -> None:
     # Relative performance (normalize to 100)
     st.caption("Relative performance (normalized to 100)")
     series_list = []
+    fallback_funds: List[str] = []
     for d in data:
         if d.get("isin") not in selected_isins or d.get("_class") != "fund":
             continue
-        dfp = _price_series_from_any(d)
+        dfp, src = _price_series_from_any(d)
         if dfp is None or dfp.empty:
             continue
+        if src != "NAV":
+            fallback_funds.append(_fund_display_name(d))
         dfp = dfp.sort_values("date")
         # Use the first finite price as base to avoid NaN/zero issues
         finite = dfp["price"][np.isfinite(dfp["price"])].astype(float)
@@ -577,6 +582,8 @@ def render_compare(data: List[Dict[str, Any]]) -> None:
             )
         )
         st.altair_chart(chart.interactive(), use_container_width=True)
+        if fallback_funds:
+            st.info("Using fallback (graphData-derived) series for: " + ", ".join(fallback_funds))
     else:
         st.info("No comparable price series found for selected funds.")
 
