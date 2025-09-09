@@ -521,71 +521,100 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
     st.table(pd.Series(basic, name="Info"))
 
 
-def render_compare(data: List[Dict[str, Any]]) -> None:
-    st.subheader("Compare")
-    # Build labeled choices with names
-    label_to_isin = {}
-    for d in data:
-        label_to_isin[_fund_display_name(d)] = d.get("isin")
-    default_labels = list(label_to_isin.keys())[:1]
-    selected_labels = st.multiselect("Select funds to compare", list(label_to_isin.keys()), default=default_labels)
-    selected_isins = [label_to_isin[l] for l in selected_labels]
+def _parse_historical_timeseries(payload: Any) -> Optional[pd.DataFrame]:
+    # Expect dict with series or list of series as per mstarpy TimeSeries/historicalData patterns
+    # We'll try common shapes to extract date/value
+    if payload is None:
+        return None
+    # If already list of points
+    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+        return _parse_nav_series(payload)
+    # If dict with 'series' or similar
+    if isinstance(payload, dict):
+        for key in ["series", "data", "values"]:
+            if isinstance(payload.get(key), list):
+                df = _parse_nav_series(payload.get(key))
+                if df is not None:
+                    return df
+    return None
 
-    # Table summary
-    cmp_rows = []
-    for d in data:
-        if d.get("isin") not in selected_isins:
-            continue
-        row = {"isin": d.get("isin"), "name": _fund_display_name(d), "_class": d.get("_class")}
-        if d.get("_class") == "fund":
-            dp = d.get("dataPoint", {})
-            prev = dp.get("previousClosePrice", {}).get("value") if isinstance(dp, dict) else None
-            row.update({"previousClose": prev})
-        cmp_rows.append(row)
-    if cmp_rows:
-        st.dataframe(pd.DataFrame(cmp_rows), use_container_width=True)
 
-    # Relative performance (normalize to 100)
-    st.caption("Relative performance (normalized to 100)")
-    series_list = []
-    fallback_funds: List[str] = []
-    for d in data:
-        if d.get("isin") not in selected_isins or d.get("_class") != "fund":
-            continue
-        dfp, src = _price_series_from_any(d)
-        if dfp is None or dfp.empty:
-            continue
-        if src != "NAV":
-            fallback_funds.append(_fund_display_name(d))
-        dfp = dfp.sort_values("date")
-        # Use the first finite price as base to avoid NaN/zero issues
-        finite = dfp["price"][np.isfinite(dfp["price"])].astype(float)
-        if finite.empty:
-            continue
+def render_performance(data: List[Dict[str, Any]]) -> None:
+    st.subheader("Performance")
+    # Single fund selector
+    label_to_isin = {_fund_display_name(d): d.get("isin") for d in data}
+    labels = list(label_to_isin.keys())
+    sel_label = st.selectbox("Select fund", labels)
+    cur = label_to_isin.get(sel_label)
+    current = next((d for d in data if d.get("isin") == cur), None)
+    if not current or current.get("_class") != "fund":
+        st.info("Select a fund to view performance.")
+        return
+
+    # Build preferred price series (NAV preferred)
+    df_nav, src_nav = _price_series_from_any(current)
+    if df_nav is None or df_nav.empty:
+        st.warning("No NAV or fallback series found for this fund.")
+        return
+
+    # Normalize to 100 from first valid point
+    finite = df_nav["price"][np.isfinite(df_nav["price"])].astype(float)
+    if not finite.empty and float(finite.iloc[0]) != 0.0:
         base = float(finite.iloc[0])
-        if base == 0.0:
-            continue
-        dfp = dfp.assign(rel=(dfp["price"].astype(float) / base) * 100.0)
-        dfp = dfp[["date", "rel"]].rename(columns={"rel": _fund_display_name(d)})
-        series_list.append(dfp.set_index("date"))
-    if series_list:
-        merged = pd.concat(series_list, axis=1).dropna(how="all").reset_index().melt("date", var_name="Fund", value_name="Index")
-        chart = (
-            alt.Chart(merged)
-            .mark_line(point=True, opacity=0.9)
-            .encode(
-                x=alt.X("date:T", title="Date", axis=alt.Axis(format="%b %Y", labelAngle=-30)),
-                y=alt.Y("Index:Q", title="Index (100=base)"),
-                color=alt.Color("Fund:N", title="Fund"),
-                strokeDash=alt.StrokeDash("Fund:N", title="Fund"),
-                tooltip=["Fund", alt.Tooltip("date:T"), alt.Tooltip("Index:Q", format=".2f")],
-            )
-        )
-        st.altair_chart(chart.interactive(), use_container_width=True)
-        if fallback_funds:
-            st.info("Using fallback (graphData-derived) series for: " + ", ".join(fallback_funds))
+        df_norm = df_nav.assign(index100=(df_nav["price"].astype(float) / base) * 100.0)
     else:
-        st.info("No comparable price series found for selected funds.")
+        df_norm = df_nav.assign(index100=np.nan)
+
+    st.caption("Price / NAV")
+    if src_nav != "NAV":
+        st.info("NAV not available. Using graphData-derived fallback.")
+    st.altair_chart(
+        alt.Chart(df_nav)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("date:T", axis=alt.Axis(format="%b %Y", labelAngle=-30)),
+            y=alt.Y("price:Q", title="NAV / Price"),
+            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("price:Q", format=".2f")],
+        )
+        .properties(height=320)
+        .interactive(),
+        use_container_width=True,
+    )
+
+    st.caption("Performance (Index 100)")
+    st.altair_chart(
+        alt.Chart(df_norm)
+        .mark_line()
+        .encode(
+            x=alt.X("date:T", axis=alt.Axis(format="%b %Y", labelAngle=-30)),
+            y=alt.Y("index100:Q", title="Index (100=base)"),
+            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("index100:Q", format=".2f")],
+        )
+        .properties(height=320)
+        .interactive(),
+        use_container_width=True,
+    )
+
+    # Historical Data (if present)
+    st.divider()
+    st.caption("Historical data (from historicalData if available)")
+    hist_payload = current.get("historicalData")
+    df_hist = _parse_historical_timeseries(hist_payload)
+    if df_hist is not None and not df_hist.empty:
+        st.altair_chart(
+            alt.Chart(df_hist)
+            .mark_line()
+            .encode(
+                x=alt.X("date:T", axis=alt.Axis(format="%b %Y", labelAngle=-30)),
+                y=alt.Y("price:Q", title="Historical Value"),
+                tooltip=[alt.Tooltip("date:T"), alt.Tooltip("price:Q", format=".2f")],
+            )
+            .properties(height=320)
+            .interactive(),
+            use_container_width=True,
+        )
+    else:
+        st.write("-")
 
     # Benchmark comparison removed per user request
 
@@ -638,7 +667,7 @@ def main() -> None:
     st.set_page_config(page_title="Fund & Stock Visualizer", layout="wide")
     st.title("Fund & Stock Visualizer")
 
-    tabs = st.tabs(["Overview", "Detail", "Compare", "Downloads", "Settings"])
+    tabs = st.tabs(["Overview", "Detail", "Performance", "Downloads", "Settings"])
     data = load_data()
 
     with tabs[0]:
@@ -649,7 +678,7 @@ def main() -> None:
             render_detail(data)
     with tabs[2]:
         if data:
-            render_compare(data)
+            render_performance(data)
     with tabs[3]:
         if data:
             render_downloads(data)
