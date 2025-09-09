@@ -63,6 +63,12 @@ def load_methods() -> Dict[str, List[str]]:
 
 def safe_call(obj: Any, method: str) -> Any:
     try:
+        # Special handling for parameterized methods
+        if method == "nav":
+            end_date = datetime.datetime.utcnow()
+            start_date = end_date - datetime.timedelta(days=365 * 5)
+            return getattr(obj, method)(start_date=start_date, end_date=end_date, frequency="daily")
+        # Default: zero-arg method call
         fn = getattr(obj, method)
         return fn()
     except Exception as exc:

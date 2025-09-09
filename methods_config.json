@@ -1,5 +1,9 @@
 {
   "fund_methods": [
+    "nav",
+    "historicalData",
+    "allocationMap",
+    "allocationWeighting",
     "feeLevel",
     "holdings",
     "taxes",
