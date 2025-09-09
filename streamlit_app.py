@@ -234,7 +234,7 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
     labels = list(label_to_isin.keys())
     left, right = st.columns([1, 3])
     with left:
-        sel_label = st.selectbox("Select fund", labels)
+        sel_label = st.selectbox("Select fund", labels, key="detail_select_fund")
         cur = label_to_isin.get(sel_label)
     current = next((d for d in data if d.get("isin") == cur), None)
     if not current:
@@ -544,7 +544,7 @@ def render_performance(data: List[Dict[str, Any]]) -> None:
     # Single fund selector
     label_to_isin = {_fund_display_name(d): d.get("isin") for d in data}
     labels = list(label_to_isin.keys())
-    sel_label = st.selectbox("Select fund", labels)
+    sel_label = st.selectbox("Select fund", labels, key="performance_select_fund")
     cur = label_to_isin.get(sel_label)
     current = next((d for d in data if d.get("isin") == cur), None)
     if not current or current.get("_class") != "fund":
