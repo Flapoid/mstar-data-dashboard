@@ -585,51 +585,43 @@ def render_performance(data: List[Dict[str, Any]]) -> None:
         st.warning("No NAV or fallback series found for this fund.")
         return
 
-    # Rolling performance helpers
-    def _last_finite(series: pd.Series) -> Optional[float]:
-        finite = series[np.isfinite(series)].astype(float)
-        return float(finite.iloc[-1]) if not finite.empty else None
+    # Prefer published trailing returns over computed
+    def _extract_trailing_returns(cur: Dict[str, Any]) -> Dict[str, Optional[float]]:
+        res: Dict[str, Optional[float]] = {"YTD": None, "1Y": None, "3Y": None, "5Y": None}
+        tr = cur.get("trailingReturn") if isinstance(cur, dict) else None
+        if isinstance(tr, dict):
+            cols = tr.get("columnDefs")
+            nav_vals = tr.get("totalReturnNAV")
+            if isinstance(cols, list) and isinstance(nav_vals, list) and len(cols) == len(nav_vals):
+                name_map = {name: idx for idx, name in enumerate(cols)}
+                def _get(name: str) -> Optional[float]:
+                    idx = name_map.get(name)
+                    if idx is None:
+                        return None
+                    try:
+                        val = nav_vals[idx]
+                        if val is None:
+                            return None
+                        return float(val)
+                    except Exception:
+                        return None
+                res["YTD"] = _get("YearToDate")
+                res["1Y"] = _get("1Year")
+                res["3Y"] = _get("3Year")
+                res["5Y"] = _get("5Year")
+        return res
 
-    def _period_return(df: pd.DataFrame, start_dt: pd.Timestamp) -> Optional[float]:
-        frame = df.sort_values("date").copy()
-        frame = frame[pd.notna(frame["price"])].copy()
-        frame["price"] = pd.to_numeric(frame["price"], errors="coerce")
-        frame = frame.dropna(subset=["price"])
-        if frame.empty:
-            return None
-        last_price = _last_finite(frame["price"])  # most recent
-        if last_price is None or last_price <= 0:
-            return None
-        # Find base price at or after start_dt
-        base_rows = frame[frame["date"] >= pd.to_datetime(start_dt)].copy()
-        if base_rows.empty:
-            return None
-        base_price = _last_finite(base_rows.iloc[[0]]["price"]) or float(base_rows.iloc[0]["price"])  # type: ignore
-        if base_price is None or base_price <= 0:
-            return None
-        return (last_price / base_price - 1.0) * 100.0
-
-    # Compute rolling periods based on last date
-    last_date = pd.to_datetime(df_nav["date"]).max()
-    ytd_start = pd.Timestamp(year=last_date.year, month=1, day=1)
-    one_y_start = last_date - pd.Timedelta(days=365)
-    three_y_start = last_date - pd.Timedelta(days=365 * 3)
-    five_y_start = last_date - pd.Timedelta(days=365 * 5)
-
-    ytd = _period_return(df_nav, ytd_start)
-    r1y = _period_return(df_nav, one_y_start)
-    r3y = _period_return(df_nav, three_y_start)
-    r5y = _period_return(df_nav, five_y_start)
+    trailing = _extract_trailing_returns(current)
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.metric("YTD", "-" if ytd is None else f"{ytd:.2f}%")
+        st.metric("YTD", "-" if trailing["YTD"] is None else f"{trailing['YTD']:.2f}%")
     with c2:
-        st.metric("1Y", "-" if r1y is None else f"{r1y:.2f}%")
+        st.metric("1Y", "-" if trailing["1Y"] is None else f"{trailing['1Y']:.2f}%")
     with c3:
-        st.metric("3Y", "-" if r3y is None else f"{r3y:.2f}%")
+        st.metric("3Y", "-" if trailing["3Y"] is None else f"{trailing['3Y']:.2f}%")
     with c4:
-        st.metric("5Y", "-" if r5y is None else f"{r5y:.2f}%")
+        st.metric("5Y", "-" if trailing["5Y"] is None else f"{trailing['5Y']:.2f}%")
 
     # Normalize to 100 from first valid point
     finite = df_nav["price"][np.isfinite(df_nav["price"])].astype(float)
