@@ -253,18 +253,29 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
     # Specialized fund view
     if current.get("_class") == "fund":
         name = get_dp("name", "-")
-        prev_close = get_dp("previousClosePrice")
         st.markdown(f"**{name}** ({current.get('isin')})")
+        # Trailing returns from riskReturnScatterplot.fundScatterplot
+        rrs_plot = current.get("riskReturnScatterplot") or {}
+        fs = rrs_plot.get("fundScatterplot") if isinstance(rrs_plot, dict) else None
+        def _get_tr(fs_obj: Any, key: str) -> Any:
+            if isinstance(fs_obj, dict):
+                per = fs_obj.get(key)
+                if isinstance(per, dict):
+                    return per.get("trailingReturn")
+            return None
+        tr_1y = _get_tr(fs, "for1Year")
+        tr_3y = _get_tr(fs, "for3Year")
+        tr_5y = _get_tr(fs, "for5Year")
+        tr_10y = _get_tr(fs, "for10Year")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Prev Close", prev_close)
-        fee = current.get("feeLevel", {})
+            st.metric("1Y", "-" if tr_1y is None else f"{float(tr_1y):.2f}%")
         with col2:
-            st.metric("Fee Level", fee.get("morningstarFeeLevel"))
+            st.metric("3Y", "-" if tr_3y is None else f"{float(tr_3y):.2f}%")
         with col3:
-            st.metric("Fee Percentile", fee.get("morningstarFeeLevelPercentileRank"))
+            st.metric("5Y", "-" if tr_5y is None else f"{float(tr_5y):.2f}%")
         with col4:
-            st.metric("Domicile", fee.get("domicileCountryId"))
+            st.metric("10Y", "-" if tr_10y is None else f"{float(tr_10y):.2f}%")
 
         st.divider()
         st.caption("Top Holdings")
