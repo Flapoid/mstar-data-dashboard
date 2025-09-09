@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import subprocess
 from typing import Any, Dict, List, Optional
 
@@ -51,7 +52,7 @@ def flatten_values(obj: Any) -> Any:
 
 
 def run_fetch(full: bool = True) -> None:
-    args = ["python", FETCH_SCRIPT, "--format", "json"]
+    args = [sys.executable, FETCH_SCRIPT, "--format", "json"]
     if full:
         args.append("--full")
     st.info("Running fetch script... (this may take a minute)")
