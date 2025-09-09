@@ -522,20 +522,48 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
 
 
 def _parse_historical_timeseries(payload: Any) -> Optional[pd.DataFrame]:
-    # Expect dict with series or list of series as per mstarpy TimeSeries/historicalData patterns
-    # We'll try common shapes to extract date/value
+    # Support multiple shapes, including historicalData.graphData.{fund,index,category}
     if payload is None:
         return None
-    # If already list of points
+    # If payload directly resembles a list of points
     if isinstance(payload, list) and payload and isinstance(payload[0], dict):
-        return _parse_nav_series(payload)
-    # If dict with 'series' or similar
-    if isinstance(payload, dict):
-        for key in ["series", "data", "values"]:
-            if isinstance(payload.get(key), list):
-                df = _parse_nav_series(payload.get(key))
-                if df is not None:
-                    return df
+        base = _parse_nav_series(payload)
+        return base
+    if not isinstance(payload, dict):
+        return None
+    # graphData with labeled series
+    graph = payload.get("graphData") if isinstance(payload.get("graphData"), dict) else None
+    if graph:
+        series_frames: List[pd.DataFrame] = []
+        for label_key in ["fund", "index", "category"]:
+            arr = graph.get(label_key)
+            if isinstance(arr, list) and arr:
+                # Expect items like {date: "YYYY-MM-DD", value: number}
+                recs: List[Dict[str, Any]] = []
+                for pt in arr:
+                    if not isinstance(pt, dict):
+                        continue
+                    d = pt.get("date")
+                    v = pt.get("value")
+                    if d is None or v is None:
+                        continue
+                    try:
+                        dt = pd.to_datetime(d)
+                        val = pd.to_numeric(v, errors="coerce")
+                        if pd.isna(val):
+                            continue
+                        recs.append({"date": dt, "value": float(val), "Series": label_key})
+                    except Exception:
+                        continue
+                if recs:
+                    series_frames.append(pd.DataFrame(recs))
+        if series_frames:
+            return pd.concat(series_frames, ignore_index=True).sort_values(["Series", "date"])  # type: ignore
+    # Generic fallbacks
+    for key in ["series", "data", "values"]:
+        if isinstance(payload.get(key), list):
+            df = _parse_nav_series(payload.get(key))
+            return df
     return None
 
 
@@ -601,16 +629,25 @@ def render_performance(data: List[Dict[str, Any]]) -> None:
     hist_payload = current.get("historicalData")
     df_hist = _parse_historical_timeseries(hist_payload)
     if df_hist is not None and not df_hist.empty:
+        # If DataFrame has 'value' and optional 'Series', use those; else adapt
+        if "value" in df_hist.columns:
+            chart_df = df_hist.copy()
+            y_field = "value:Q"
+        elif "price" in df_hist.columns:
+            chart_df = df_hist.rename(columns={"price": "value"})
+            y_field = "value:Q"
+        else:
+            chart_df = df_hist
+            y_field = "value:Q"
+        enc = {
+            "x": alt.X("date:T", axis=alt.Axis(format="%b %Y", labelAngle=-30)),
+            "y": alt.Y(y_field, title="Historical Value"),
+            "tooltip": [alt.Tooltip("date:T"), alt.Tooltip("value:Q", format=".2f")],
+        }
+        if "Series" in chart_df.columns:
+            enc["color"] = alt.Color("Series:N", title="Series")
         st.altair_chart(
-            alt.Chart(df_hist)
-            .mark_line()
-            .encode(
-                x=alt.X("date:T", axis=alt.Axis(format="%b %Y", labelAngle=-30)),
-                y=alt.Y("price:Q", title="Historical Value"),
-                tooltip=[alt.Tooltip("date:T"), alt.Tooltip("price:Q", format=".2f")],
-            )
-            .properties(height=320)
-            .interactive(),
+            alt.Chart(chart_df).mark_line().encode(**enc).properties(height=320).interactive(),
             use_container_width=True,
         )
     else:
