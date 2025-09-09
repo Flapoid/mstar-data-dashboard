@@ -114,6 +114,65 @@ def _price_series_from_graphdata(current: Dict[str, Any]) -> Optional[pd.DataFra
     if df.empty:
         return None
     return df
+def _parse_nav_series(nav_payload: Any) -> Optional[pd.DataFrame]:
+    # Expect a list of points; be resilient to different shapes
+    if not isinstance(nav_payload, list) or not nav_payload:
+        return None
+    records: List[Dict[str, Any]] = []
+    for point in nav_payload:
+        if not isinstance(point, dict):
+            continue
+        # Date candidates
+        raw_date = (
+            point.get("date")
+            or point.get("t")
+            or point.get("d")
+            or point.get("timestamp")
+            or point.get("time")
+        )
+        # Value candidates
+        val = (
+            point.get("nav")
+            or point.get("value")
+            or point.get("v")
+        )
+        # Some APIs use vector values: { v: [nav, totalReturn, ...] }
+        if val is None and isinstance(point.get("values"), list) and point.get("values"):
+            val = point.get("values")[0]
+        if val is None and isinstance(point.get("v"), list) and point.get("v"):
+            val = point.get("v")[0]
+        if raw_date is None or val is None:
+            continue
+        # Parse date
+        try:
+            if isinstance(raw_date, (int, float)):
+                # Assume ms since epoch if very large
+                if raw_date > 10_000_000_000:
+                    dt = pd.to_datetime(int(raw_date), unit="ms", utc=True).tz_convert(None)
+                else:
+                    dt = pd.to_datetime(int(raw_date), unit="s", utc=True).tz_convert(None)
+            else:
+                dt = pd.to_datetime(str(raw_date))
+        except Exception:
+            continue
+        price = pd.to_numeric(val, errors="coerce")
+        if pd.isna(price):
+            continue
+        records.append({"date": dt, "price": float(price)})
+    if not records:
+        return None
+    df = pd.DataFrame(records).dropna().sort_values("date")
+    return df if not df.empty else None
+
+
+def _price_series_from_any(current: Dict[str, Any]) -> Optional[pd.DataFrame]:
+    # Prefer NAV if available
+    if isinstance(current, dict) and "nav" in current:
+        df_nav = _parse_nav_series(current.get("nav"))
+        if df_nav is not None and not df_nav.empty:
+            return df_nav
+    # Fallback to graphData-derived quarterly series
+    return _price_series_from_graphdata(current)
 
 
 def _net_assets_series(current: Dict[str, Any]) -> Optional[pd.DataFrame]:
@@ -313,7 +372,7 @@ def render_detail(data: List[Dict[str, Any]]) -> None:
 
         st.divider()
         st.caption("Price (Quarterly)")
-        dfp = _price_series_from_graphdata(current)
+        dfp = _price_series_from_any(current)
         if dfp is not None:
             line = (
                 alt.Chart(dfp)
@@ -490,7 +549,7 @@ def render_compare(data: List[Dict[str, Any]]) -> None:
     for d in data:
         if d.get("isin") not in selected_isins or d.get("_class") != "fund":
             continue
-        dfp = _price_series_from_graphdata(d)
+        dfp = _price_series_from_any(d)
         if dfp is None or dfp.empty:
             continue
         dfp = dfp.sort_values("date")
