@@ -585,43 +585,59 @@ def render_performance(data: List[Dict[str, Any]]) -> None:
         st.warning("No NAV or fallback series found for this fund.")
         return
 
-    # Prefer published trailing returns over computed
-    def _extract_trailing_returns(cur: Dict[str, Any]) -> Dict[str, Optional[float]]:
-        res: Dict[str, Optional[float]] = {"YTD": None, "1Y": None, "3Y": None, "5Y": None}
-        tr = cur.get("trailingReturn") if isinstance(cur, dict) else None
-        if isinstance(tr, dict):
-            cols = tr.get("columnDefs")
-            nav_vals = tr.get("totalReturnNAV")
-            if isinstance(cols, list) and isinstance(nav_vals, list) and len(cols) == len(nav_vals):
-                name_map = {name: idx for idx, name in enumerate(cols)}
-                def _get(name: str) -> Optional[float]:
-                    idx = name_map.get(name)
-                    if idx is None:
-                        return None
-                    try:
-                        val = nav_vals[idx]
-                        if val is None:
-                            return None
-                        return float(val)
-                    except Exception:
-                        return None
-                res["YTD"] = _get("YearToDate")
-                res["1Y"] = _get("1Year")
-                res["3Y"] = _get("3Year")
-                res["5Y"] = _get("5Year")
-        return res
+    # Prefer published annual table (growth10KReturnData) for YTD and last 3 calendar years
+    def _extract_ytd_and_last3_years(cur: Dict[str, Any]) -> Tuple[Optional[float], List[Tuple[str, Optional[float]]]]:
+        hist = cur.get("historicalData") if isinstance(cur, dict) else None
+        if not isinstance(hist, dict):
+            return None, []
+        table = hist.get("table")
+        if not isinstance(table, dict):
+            return None, []
+        cols = table.get("columnDefs")
+        rows = table.get("growth10KReturnData")
+        if not isinstance(cols, list) or not isinstance(rows, list):
+            return None, []
+        # find fund row
+        fund_row = next((r for r in rows if isinstance(r, dict) and r.get("label") == "fund"), None)
+        if not isinstance(fund_row, dict):
+            return None, []
+        datum = fund_row.get("datum")
+        if not isinstance(datum, list) or len(datum) != len(cols):
+            return None, []
+        # map column name -> value
+        def _to_float(x: Any) -> Optional[float]:
+            try:
+                if x is None:
+                    return None
+                return float(x)
+            except Exception:
+                return None
+        col_to_val: Dict[str, Optional[float]] = {str(name): _to_float(datum[i]) for i, name in enumerate(cols)}
+        # YTD
+        ytd_val = col_to_val.get("YTD")
+        # last 3 numeric years
+        years_only = [int(c) for c in cols if isinstance(c, (int, str)) and str(c).isdigit()]
+        years_only.sort()
+        last3 = years_only[-3:]
+        year_vals: List[Tuple[str, Optional[float]]] = [(str(y), col_to_val.get(str(y))) for y in last3]
+        return ytd_val, year_vals
 
-    trailing = _extract_trailing_returns(current)
+    ytd_val, last3_years = _extract_ytd_and_last3_years(current)
 
     c1, c2, c3, c4 = st.columns(4)
+    # Label YTD and the last 3 calendar years from the table
     with c1:
-        st.metric("YTD", "-" if trailing["YTD"] is None else f"{trailing['YTD']:.2f}%")
+        st.metric("YTD", "-" if ytd_val is None else f"{ytd_val:.2f}%")
+    # Ensure exactly 3 slots; pad if needed
+    y_labels = [yl for yl in last3_years]
+    while len(y_labels) < 3:
+        y_labels.insert(0, ("-", None))
     with c2:
-        st.metric("1Y", "-" if trailing["1Y"] is None else f"{trailing['1Y']:.2f}%")
+        st.metric(y_labels[-3][0], "-" if y_labels[-3][1] is None else f"{y_labels[-3][1]:.2f}%")
     with c3:
-        st.metric("3Y", "-" if trailing["3Y"] is None else f"{trailing['3Y']:.2f}%")
+        st.metric(y_labels[-2][0], "-" if y_labels[-2][1] is None else f"{y_labels[-2][1]:.2f}%")
     with c4:
-        st.metric("5Y", "-" if trailing["5Y"] is None else f"{trailing['5Y']:.2f}%")
+        st.metric(y_labels[-1][0], "-" if y_labels[-1][1] is None else f"{y_labels[-1][1]:.2f}%")
 
     # Normalize to 100 from first valid point
     finite = df_nav["price"][np.isfinite(df_nav["price"])].astype(float)
